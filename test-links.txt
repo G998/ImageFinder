@@ -1,0 +1,4 @@
+Please paste your list of test URLs below:
+https://cooking.nytimes.com/
+https://centralparkzoo.com/
+https://en.wikipedia.org/wiki/Sidney_Poitier
