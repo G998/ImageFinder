@@ -57,30 +57,18 @@ public class ImageFinder extends HttpServlet{
 
 		try{
 			String[] urls = url.split(",");
-
 			ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(4);
 			CountDownLatch latch = new CountDownLatch(urls.length);
 			for(String URL: urls){
 				executor.submit(() -> simpleCrawl(URL, latch));
 			}
+			System.out.println(imageList.toString());
 			latch.await();
 			executor.shutdown();
-
-
-			/*
+/*
 			//retrieve subpages of main page
 			Elements subpages = doc.select("a[href]");
 			System.out.printf("Found %d links. %n", subpages.size());
-			*/
-
-
-
-/*
-			for(Element subpage: subpages){
-
-				//iR.start();//start the thread so it can crawl the subpage
-				//iR.join();//main thread will wait on all the threads to finish
-			}
 */
 			return imageList;
 		}catch(Exception e){
