@@ -6,7 +6,7 @@ The goal of this task is to perform a web crawl on the URL string provided. From
 
 You also need to build upon this task in one (or more) of the following ways:
 
-- Crawl the rest of the site or sub-pages to find more images
+- Crawl the rest of the site or sub-pages to find more images*
 - 
 - Make your crawler multithreaded so your crawl is performed on multiple pages at a time*
 - 

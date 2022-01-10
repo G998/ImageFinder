@@ -1,17 +1,17 @@
 package com.eulerity.hackathon.imagefinder;
 
+import java.net.URI;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
-
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import org.jsoup.Jsoup;
@@ -25,8 +25,8 @@ import org.jsoup.select.Elements;
 )
 public class ImageFinder extends HttpServlet{
 	private static final long serialVersionUID = 1L;
-	private List<String> imageList = Collections.synchronizedList(new ArrayList<>());
-	private Map<String, String> baseURLs = new HashMap<>();
+	private ConcurrentHashMap<String, Boolean> imageList= new ConcurrentHashMap<>();//Stores the images we will display after crawling
+	private ConcurrentHashMap<String, Boolean> visitedURLs = new ConcurrentHashMap<>();//hashmap to memoize visited URLs
 
 	protected static final Gson GSON = new GsonBuilder().create();
 
@@ -38,63 +38,98 @@ public class ImageFinder extends HttpServlet{
 			"https://images.pexels.com/photos/1108099/pexels-photo-1108099.jpeg?auto=compress&format=tiny"
     };
 
-	private void simpleCrawl(String url, CountDownLatch latch){
-		try {
-			System.out.println("Starting crawl of page: " + url);
-			Document doc = Jsoup.connect(url).get();
-			Elements imageElements = doc.getElementsByTag("img");
-			for(Element image: imageElements){
-				String imageURL = image.attr("src");
-				if(imageURL.endsWith(".png") || imageURL.endsWith(".jpg") || imageURL.endsWith(".gif")){
-					imageList.add(imageURL);
-				}
+	private void retrieveImages(Document doc){
+		Elements imageElements = doc.getElementsByTag("img");
+		for(Element image: imageElements){
+			String imageURL = image.attr("src");
+			if(!imageURL.startsWith("/static")){//images that started with /static were broken
+				imageList.put(imageURL,true);
 			}
-			latch.countDown();
-			System.out.println(latch.getCount());
-		} catch (IOException e) {
-			e.printStackTrace();
 		}
 	}
-	private boolean isInSiteLink(String url){
-		//url.startsWith(baseUrl)
-		return (url.startsWith("/") || url.startsWith("./") || url.startsWith("../"));
+	private void mainPageCrawl(Document doc, String url, CountDownLatch latch){
+		System.out.println(Thread.currentThread().getName() + ": Starting crawl of " + url);
+		retrieveImages(doc);
+		latch.countDown();
 	}
-	protected List<String> crawlURL(String url){
+	private void subPageCrawl(String subpageURL, List<String> domains, CountDownLatch latch){
 		try{
-			String[] urls = url.split(",");
+			for(String domain:domains){
+				if(subpageURL.contains(domain)){
+					System.out.println(Thread.currentThread().getName() + ": Starting crawl of subPage: " + subpageURL);
+					retrieveImages(Jsoup.connect(subpageURL).get()); //retrieve the images from the subpage.
+				}
+				else if(subpageURL.startsWith("/") || subpageURL.startsWith("./") || subpageURL.startsWith("../")){
+					String url = "https://" + domain + subpageURL;
+					System.out.println(Thread.currentThread().getName() + ": Starting crawl of subPage: " + url);
+					retrieveImages(Jsoup.connect(url).get());
+				}
+			}
+		}catch(Exception e){e.printStackTrace();}
+		latch.countDown();
+	}
 
+	protected Set<String> crawlURL(String url){
+		try{
+			String[] urls = url.split(",");//the localhost:8080 input box can take a list of main pages by typing URL,URL,URL,...
 			ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(4);
-			CountDownLatch latch = new CountDownLatch(urls.length);
 
-			Map<String, Boolean> visitedURLs = new HashMap<>();//hashmap to memoize visited URLs
+			//crawl main page(s)
+			CountDownLatch latch = new CountDownLatch(urls.length);//latch to coordinate main thread with the exit of all worker threads for main page urls
+			ConcurrentHashMap<Element, Boolean> subPages = new ConcurrentHashMap<>();//stores href links of the main page to be used as subpages
+			List<String> domains = new ArrayList<>();//stores domains for in-site link checking
 			for(String URL: urls){
 					if(visitedURLs.containsKey(URL)){
 						System.out.println("We already visited this URL.");
-						latch.countDown();
 					}
 					else {
+						domains.add(new URI(URL).getHost());
 						visitedURLs.put(URL, true);
-						executor.submit(() -> simpleCrawl(URL, latch));
+						//retrieve a document object with Jsoup
+						Document doc = Jsoup.connect(url).get();
+						//crawl the main page(s)
+						executor.submit(() -> mainPageCrawl(doc, url, latch));
+						Elements subpages = doc.select("a[href]");//get all links
+						for(Element subpage: subpages){
+							subPages.put(subpage,false);
+						}
 					}
 			}
 			latch.await();
-			executor.shutdown();
-/*
-			//retrieve subpages of main page
-			Elements subpages = doc.select("a[href]");
-			System.out.printf("Found %d links. %n", subpages.size());
-*/
+
+			//crawl subpages
+			CountDownLatch subPageLatch = new CountDownLatch(subPages.size());
+			for(Element page: subPages.keySet()){
+					String subpageURL = page.attr("href");
+					if(visitedURLs.containsKey(subpageURL)){
+						System.out.println("We already visited this URL:" + subpageURL);
+						subPageLatch.countDown();
+					}
+					else{
+						visitedURLs.put(subpageURL,true);
+						executor.submit(()-> subPageCrawl(subpageURL,domains, subPageLatch));
+					}
+
+			}
+			subPageLatch.await();
+
+			System.out.println("Done.");
+
 		}catch(Exception e){
 			e.printStackTrace();
 		}
-		return imageList;
+
+		return imageList.keySet();
 	}
+
 	@Override
 	protected final void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
 		resp.setContentType("text/json");
 		String path = req.getServletPath();
 		String url = req.getParameter("url");
 		System.out.println("Got request of:" + path + " with query param:" + url);
+
+		imageList.clear();//avoid duplicates on consecutive calls
 
 		//I forked the printing so that the default test passes with testImages and my own crawlURL method doesn't throw an exception
 		// (since it executes when we're sure the url isn't empty/null)
