@@ -1,9 +1,7 @@
 package com.eulerity.hackathon.imagefinder;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -28,6 +26,7 @@ import org.jsoup.select.Elements;
 public class ImageFinder extends HttpServlet{
 	private static final long serialVersionUID = 1L;
 	private List<String> imageList = Collections.synchronizedList(new ArrayList<>());
+	private Map<String, String> baseURLs = new HashMap<>();
 
 	protected static final Gson GSON = new GsonBuilder().create();
 
@@ -45,7 +44,10 @@ public class ImageFinder extends HttpServlet{
 			Document doc = Jsoup.connect(url).get();
 			Elements imageElements = doc.getElementsByTag("img");
 			for(Element image: imageElements){
-				imageList.add(image.attr("src"));
+				String imageURL = image.attr("src");
+				if(imageURL.endsWith(".png") || imageURL.endsWith(".jpg") || imageURL.endsWith(".gif")){
+					imageList.add(imageURL);
+				}
 			}
 			latch.countDown();
 			System.out.println(latch.getCount());
@@ -53,16 +55,28 @@ public class ImageFinder extends HttpServlet{
 			e.printStackTrace();
 		}
 	}
+	private boolean isInSiteLink(String url){
+		//url.startsWith(baseUrl)
+		return (url.startsWith("/") || url.startsWith("./") || url.startsWith("../"));
+	}
 	protected List<String> crawlURL(String url){
-
 		try{
 			String[] urls = url.split(",");
+
 			ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(4);
 			CountDownLatch latch = new CountDownLatch(urls.length);
+
+			Map<String, Boolean> visitedURLs = new HashMap<>();//hashmap to memoize visited URLs
 			for(String URL: urls){
-				executor.submit(() -> simpleCrawl(URL, latch));
+					if(visitedURLs.containsKey(URL)){
+						System.out.println("We already visited this URL.");
+						latch.countDown();
+					}
+					else {
+						visitedURLs.put(URL, true);
+						executor.submit(() -> simpleCrawl(URL, latch));
+					}
 			}
-			System.out.println(imageList.toString());
 			latch.await();
 			executor.shutdown();
 /*
@@ -70,7 +84,6 @@ public class ImageFinder extends HttpServlet{
 			Elements subpages = doc.select("a[href]");
 			System.out.printf("Found %d links. %n", subpages.size());
 */
-			return imageList;
 		}catch(Exception e){
 			e.printStackTrace();
 		}

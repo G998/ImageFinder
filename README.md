@@ -8,13 +8,14 @@ You also need to build upon this task in one (or more) of the following ways:
 
 - Crawl the rest of the site or sub-pages to find more images
 - 
-- Make your crawler multithreaded so your crawl is performed on multiple pages at a time
+- Make your crawler multithreaded so your crawl is performed on multiple pages at a time*
 - 
-- Think about how not to crawl the same page multiple times
+- Think about how not to crawl the same page multiple times*
 - 
 - Make your crawler "friendly" - try not to get banned from the site by performing too many crawls
 
 - Show off your front-end dev skills with Javascript, HTML, and/or CSS to make the site look more engaging
+- 
 - Any other way you feel you can show off your strengths as a developer 😊
 
 **PLEASE do not send us a submission with only a basic JSoup crawl and only a couple lines of code.** This is your chance to prove what you could contribute to our team.
