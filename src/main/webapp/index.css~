@@ -1,0 +1,9 @@
+body {
+    
+
+}
+.output{
+    position: relative;
+    background-image: url("./spyglass.jpg");
+    mix-blend-mode: darken;
+}

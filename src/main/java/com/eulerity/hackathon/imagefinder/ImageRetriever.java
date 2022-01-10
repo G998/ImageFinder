@@ -87,11 +87,10 @@ public class ImageRetriever {
                     visitedURLs.put(subpageURL,true);
                     executor.submit(()-> subPageCrawl(subpageURL,domains, subPageLatch));
                 }
-
             }
             subPageLatch.await();
 
-        }catch(Exception e){ e.printStackTrace(); }
+        } catch(Exception e) { e.printStackTrace(); }
         System.out.println("Done.");
         return imageList.keySet();
     }
