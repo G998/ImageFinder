@@ -4,6 +4,8 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+
+import java.io.IOException;
 import java.net.URI;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -13,7 +15,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 
 public class ImageRetriever {
     private ConcurrentHashMap<String, Boolean> imageList= new ConcurrentHashMap<>();//Stores the images we will display after crawling
-    private ConcurrentHashMap<String, Boolean> visitedURLs = new ConcurrentHashMap<>();//hashmap to memoize visited URLs
+    private ConcurrentHashMap<String, Boolean> URLs = new ConcurrentHashMap<>();//hashmap to memoize visited URLs
+    private String domain;
 
     private void retrieveImages(Document doc){
         Elements imageElements = doc.getElementsByTag("img");
@@ -24,12 +27,19 @@ public class ImageRetriever {
             }
         }
     }
-    private void mainPageCrawl(Document doc, String url, CountDownLatch latch){
+    private void mainPageCrawl(String url, CountDownLatch latch){
         System.out.println(Thread.currentThread().getName() + ": Starting crawl of " + url);
-        retrieveImages(doc);
+        Document doc;
+        try {
+            doc = Jsoup.connect(url).get();
+            populateSubpages(doc);
+            retrieveImages(doc);
+        } catch (IOException e) {e.printStackTrace();}
+        URLs.put(url,true);//update to true because we have just visited this url.
         latch.countDown();
     }
-    private String formatSubpage(String subpageURL, String domain){
+    //formatSubpage filters only for the correct type of subpage, and returns a properly formatted URL
+    private String formatSubpage(String subpageURL){
         /*
         changed from .contains to .startsWith to make sure it's only subpages in the same domain
         because subpages that contained the domain string
@@ -52,12 +62,21 @@ public class ImageRetriever {
         }
         return "";
     }
-    private void subPageCrawl(String subpageURL, String domain, CountDownLatch latch){
+    private void populateSubpages(Document doc){
+        Elements subpages = doc.select("a[href]");//get all links
+        for(Element element: subpages){
+            String formattedURL = formatSubpage(element.attr("href"));
+            if(!formattedURL.equals("")) {
+                URLs.put(formattedURL, false);//URL of a proper subpage, false because it hasn't been crawled/visited yet.
+            }
+        }
+    }
+    private void subPageCrawl(String subpageURL, CountDownLatch latch){
         try{
-            String formattedURL = formatSubpage(subpageURL,domain);
+            String formattedURL = formatSubpage(subpageURL);
             if(!formattedURL.equals("")){
-                //retrieve the images from the subpage.
-                retrieveImages(Jsoup.connect(formattedURL).get());
+                Document doc = Jsoup.connect(formattedURL).get();
+                retrieveImages(doc); //retrieve the images from the subpage.
             }
         }catch(Exception e){e.printStackTrace();}
         latch.countDown();
@@ -70,37 +89,21 @@ public class ImageRetriever {
 
             //crawl main page(s)
             CountDownLatch latch = new CountDownLatch(1);//latch to coordinate main thread with the exit of all worker threads for main page urls
-            ConcurrentHashMap<Element, Boolean> subPages = new ConcurrentHashMap<>();//stores href links of the main page to be used as subpages
-            String domain = "";
-            if(visitedURLs.containsKey(url)){
-                System.out.println("We already visited this URL.");
-            }
-            else {
-                domain = new URI(url).getHost();
-                visitedURLs.put(url, true);
-                //retrieve a document object with Jsoup
-                Document doc = Jsoup.connect(url).get();
-                //crawl the main page(s)
-                executor.submit(() -> mainPageCrawl(doc, url, latch));
-                Elements subpages = doc.select("a[href]");//get all links
-                for(Element subpage: subpages){
-                    subPages.put(subpage,false);
-                }
-            }
+            domain = new URI(url).getHost();
+
+            //crawl the main page(s)
+            executor.submit(() -> mainPageCrawl(url,latch));
             latch.await();
 
             //crawl subpages
-            CountDownLatch subPageLatch = new CountDownLatch(subPages.size());
-            for(Element page: subPages.keySet()){
-                String subpageURL = page.attr("href");
-                if(visitedURLs.containsKey(subpageURL)){
+            CountDownLatch subPageLatch = new CountDownLatch(URLs.size());//URLs contains both main page and subpages
+            for(String subpageURL: URLs.keySet()){
+                if(URLs.get(subpageURL)){//true if visited
                     System.out.println("We already visited this URL:" + subpageURL);
                     subPageLatch.countDown();
                 }
                 else{
-                    visitedURLs.put(subpageURL,true);
-                    String finalDomain = domain;
-                    executor.submit(()-> subPageCrawl(subpageURL, finalDomain, subPageLatch));
+                    executor.submit(()-> subPageCrawl(subpageURL, subPageLatch));
                 }
             }
             subPageLatch.await();
