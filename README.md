@@ -33,7 +33,7 @@ Before beginning, make sure you have the following installed and ready to use
 - Java 8
 
 ### Setup
-To start, open a t*erminal window and navigate to wherever you unzipped to the root directory `imagefinder`. To build the project, run the command:
+To start, open a terminal window and navigate to wherever you unzipped to the root directory `imagefinder`. To build the project, run the command:
 
 >`mvn package`
 

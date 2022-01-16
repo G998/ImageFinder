@@ -5,8 +5,6 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -31,18 +29,35 @@ public class ImageRetriever {
         retrieveImages(doc);
         latch.countDown();
     }
-    private void subPageCrawl(String subpageURL, List<String> domains, CountDownLatch latch){
+    private String formatSubpage(String subpageURL, String domain){
+        /*
+        changed from .contains to .startsWith to make sure it's only subpages in the same domain
+        because subpages that contained the domain string
+        anywhere else in the URL would pass the filter of .contains.
+         */
+        if(subpageURL.startsWith("https://" + domain)) {
+            System.out.println(Thread.currentThread().getName() + ": Starting crawl of subPage: " + subpageURL);
+            return subpageURL;
+        }
+        /*
+        !contains(.com) works because a regular /instagram.com would pass the startsWith tests below,
+        and the formatted url would be https://cnn.com//instagram.com/....
+        which is not a valid URL, so an exception is thrown. Now it should be properly filtered.
+        */
+        else if((subpageURL.startsWith("/")  || subpageURL.startsWith("./") || subpageURL.startsWith("../"))
+                && !subpageURL.contains(".com")){
+            String url = "https://" + domain + subpageURL;
+            System.out.println(Thread.currentThread().getName() + ": Starting crawl of subPage: " + url);
+            return url;
+        }
+        return "";
+    }
+    private void subPageCrawl(String subpageURL, String domain, CountDownLatch latch){
         try{
-            for(String domain:domains){
-                if(subpageURL.contains(domain)){
-                    System.out.println(Thread.currentThread().getName() + ": Starting crawl of subPage: " + subpageURL);
-                    retrieveImages(Jsoup.connect(subpageURL).get()); //retrieve the images from the subpage.
-                }
-                else if(subpageURL.startsWith("/") || subpageURL.startsWith("./") || subpageURL.startsWith("../")){
-                    String url = "https://" + domain + subpageURL;
-                    System.out.println(Thread.currentThread().getName() + ": Starting crawl of subPage: " + url);
-                    retrieveImages(Jsoup.connect(url).get());
-                }
+            String formattedURL = formatSubpage(subpageURL,domain);
+            if(!formattedURL.equals("")){
+                //retrieve the images from the subpage.
+                retrieveImages(Jsoup.connect(formattedURL).get());
             }
         }catch(Exception e){e.printStackTrace();}
         latch.countDown();
@@ -51,18 +66,17 @@ public class ImageRetriever {
     //method called in ImageFinder
     public Set<String> crawlURL(String url){
         try{
-            imageList.clear();//avoid duplicates on consecutive calls
             ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(4);
 
             //crawl main page(s)
             CountDownLatch latch = new CountDownLatch(1);//latch to coordinate main thread with the exit of all worker threads for main page urls
             ConcurrentHashMap<Element, Boolean> subPages = new ConcurrentHashMap<>();//stores href links of the main page to be used as subpages
-            List<String> domains = new ArrayList<>();//stores domains for in-site link checking
+            String domain = "";
             if(visitedURLs.containsKey(url)){
                 System.out.println("We already visited this URL.");
             }
             else {
-                domains.add(new URI(url).getHost());
+                domain = new URI(url).getHost();
                 visitedURLs.put(url, true);
                 //retrieve a document object with Jsoup
                 Document doc = Jsoup.connect(url).get();
@@ -85,7 +99,8 @@ public class ImageRetriever {
                 }
                 else{
                     visitedURLs.put(subpageURL,true);
-                    executor.submit(()-> subPageCrawl(subpageURL,domains, subPageLatch));
+                    String finalDomain = domain;
+                    executor.submit(()-> subPageCrawl(subpageURL, finalDomain, subPageLatch));
                 }
             }
             subPageLatch.await();
