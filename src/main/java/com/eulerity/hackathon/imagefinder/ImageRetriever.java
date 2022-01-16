@@ -77,6 +77,10 @@ public class ImageRetriever {
             if(!formattedURL.equals("")){
                 Document doc = Jsoup.connect(formattedURL).get();
                 retrieveImages(doc); //retrieve the images from the subpage.
+                if(URLs.size() < 100){
+                    populateSubpages(doc);//possible infinite loop, I need a closing condition.
+                }
+
             }
         }catch(Exception e){e.printStackTrace();}
         latch.countDown();
