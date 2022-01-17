@@ -1,6 +1,6 @@
 Please paste your list of test URLs below:
 https://cooking.nytimes.com/
 https://centralparkzoo.com/
-https://www.riotgames.com/en
 https://www.leagueoflegends.com/en-us/
 https://www.shutterstock.com/photos
+https://cnn.com

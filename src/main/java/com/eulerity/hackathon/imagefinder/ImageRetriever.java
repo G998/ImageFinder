@@ -4,49 +4,28 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
-
 import java.io.IOException;
 import java.net.URI;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.*;
 
 public class ImageRetriever {
     private ConcurrentHashMap<String, Boolean> imageList= new ConcurrentHashMap<>();//Stores the images we will display after crawling
-    private ConcurrentHashMap<String, Boolean> URLs = new ConcurrentHashMap<>();//hashmap to memoize visited URLs
+    private ConcurrentHashMap<String, Boolean> visitedURLs = new ConcurrentHashMap<>();//hashmap to memoize visited URLs
+    private ConcurrentHashMap<String, Boolean> unvisitedURLs = new ConcurrentHashMap<>();//will contain pages we have yet to visit
     private String domain;
+    private final ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(3);
 
-    private void retrieveImages(Document doc){
-        Elements imageElements = doc.getElementsByTag("img");
-        for(Element image: imageElements){
-            String imageURL = image.attr("src");
-            if(!imageURL.startsWith("/static")){//images that started with /static were broken
-                imageList.put(imageURL,true);
-            }
-        }
+    private void message(String msg, String url){
+        System.out.println(Thread.currentThread().getName() + msg + url);
     }
-    private void mainPageCrawl(String url, CountDownLatch latch){
-        System.out.println(Thread.currentThread().getName() + ": Starting crawl of " + url);
-        Document doc;
-        try {
-            doc = Jsoup.connect(url).get();
-            populateSubpages(doc);
-            retrieveImages(doc);
-        } catch (IOException e) {e.printStackTrace();}
-        URLs.put(url,true);//update to true because we have just visited this url.
-        latch.countDown();
-    }
-    //formatSubpage filters only for the correct type of subpage, and returns a properly formatted URL
-    private String formatSubpage(String subpageURL){
+    private String formatURL(String subpageURL){//formatSubpage filters only for the correct type of subpage, and returns a properly formatted URL
         /*
-        changed from .contains to .startsWith to make sure it's only subpages in the same domain
-        because subpages that contained the domain string
-        anywhere else in the URL would pass the filter of .contains.
+        only subpages in the same domain allowed.
+        subpages that contained the domain string
+        anywhere else in the URL would pass the filter of .contains. so we use .startsWith
          */
         if(subpageURL.startsWith("https://" + domain)) {
-            System.out.println(Thread.currentThread().getName() + ": Starting crawl of subPage: " + subpageURL);
             return subpageURL;
         }
         /*
@@ -56,64 +35,78 @@ public class ImageRetriever {
         */
         else if((subpageURL.startsWith("/")  || subpageURL.startsWith("./") || subpageURL.startsWith("../"))
                 && !subpageURL.contains(".com")){
-            String url = "https://" + domain + subpageURL;
-            System.out.println(Thread.currentThread().getName() + ": Starting crawl of subPage: " + url);
-            return url;
+            return "https://" + domain + subpageURL;
         }
-        return "";
+        return "";//in case it's not a subpage, it returns an empty string so the code should check the returning value.
     }
     private void populateSubpages(Document doc){
         Elements subpages = doc.select("a[href]");//get all links
         for(Element element: subpages){
-            String formattedURL = formatSubpage(element.attr("href"));
+            String formattedURL = formatURL(element.attr("href"));
             if(!formattedURL.equals("")) {
-                URLs.put(formattedURL, false);//URL of a proper subpage, false because it hasn't been crawled/visited yet.
+                if(!visitedURLs.containsKey(formattedURL)){
+                    unvisitedURLs.put(formattedURL, false);//URL of a proper subpage, false because it hasn't been crawled/visited yet.
+                }
             }
         }
     }
-    private void subPageCrawl(String subpageURL, CountDownLatch latch){
-        try{
-            String formattedURL = formatSubpage(subpageURL);
-            if(!formattedURL.equals("")){
-                Document doc = Jsoup.connect(formattedURL).get();
-                retrieveImages(doc); //retrieve the images from the subpage.
-                if(URLs.size() < 100){
-                    populateSubpages(doc);//possible infinite loop, I need a closing condition.
-                }
-
+    private void retrieveImages(Document doc){
+        Elements imageElements = doc.getElementsByTag("img");
+        for(Element image: imageElements){
+            String imageURL = image.attr("src");
+            if(!imageURL.startsWith("/static")){//images that started with /static were broken
+                imageList.put(imageURL,true);
             }
-        }catch(Exception e){e.printStackTrace();}
+        }
+    }
+    private void pageCrawl(String url, CountDownLatch latch){
+        message(": Starting crawl of ", url);
+        try {
+            String properURL = formatURL(url);
+            if (!properURL.equals("")) {
+                Document doc = Jsoup.connect(properURL).get();
+                retrieveImages(doc);
+                populateSubpages(doc);
+                visitedURLs.put(properURL,true);
+            }
+        } catch (IOException e) {e.printStackTrace();}
         latch.countDown();
     }
 
     //method called in ImageFinder
     public Set<String> crawlURL(String url){
         try{
-            ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(4);
-
-            //crawl main page(s)
-            CountDownLatch latch = new CountDownLatch(1);//latch to coordinate main thread with the exit of all worker threads for main page urls
             domain = new URI(url).getHost();
 
-            //crawl the main page(s)
-            executor.submit(() -> mainPageCrawl(url,latch));
+            //crawl main page(s)
+            CountDownLatch latch = new CountDownLatch(1);
+            executor.submit(()-> pageCrawl(url, latch));
             latch.await();
 
             //crawl subpages
-            CountDownLatch subPageLatch = new CountDownLatch(URLs.size());//URLs contains both main page and subpages
-            for(String subpageURL: URLs.keySet()){
-                if(URLs.get(subpageURL)){//true if visited
-                    System.out.println("We already visited this URL:" + subpageURL);
-                    subPageLatch.countDown();
+            int counter = 0;
+            while(true) {
+                int subpageLatchSize = Math.min(unvisitedURLs.size(), 250);
+                CountDownLatch subPageLatch = new CountDownLatch(subpageLatchSize);
+                if(executor.getCompletedTaskCount() + counter > 250){
+                    executor.shutdown();
+                    break;
                 }
-                else{
-                    executor.submit(()-> subPageCrawl(subpageURL, subPageLatch));
+                for (String subpageURL : unvisitedURLs.keySet()) {
+                    ++counter;
+                    if(counter > 250) break;
+                    if(visitedURLs.contains(subpageURL)){
+                        subPageLatch.countDown();
+                    }
+                    else if(executor.getCompletedTaskCount() + counter < 250) {
+                        executor.submit(() -> pageCrawl(subpageURL, subPageLatch));
+                    }
                 }
+                Thread.sleep(1000);
             }
-            subPageLatch.await();
-
+            System.out.println(executor.awaitTermination(1, TimeUnit.MINUTES));
         } catch(Exception e) { e.printStackTrace(); }
-        System.out.println("Done.");
+
         return imageList.keySet();
     }
 }
