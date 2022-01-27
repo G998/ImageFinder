@@ -10,9 +10,9 @@ import java.util.Set;
 import java.util.concurrent.*;
 
 public class ImageRetriever {
-    private ConcurrentHashMap<String, Boolean> imageList= new ConcurrentHashMap<>();//Stores the images we will display after crawling
-    private ConcurrentHashMap<String, Boolean> visitedURLs = new ConcurrentHashMap<>();//hashmap to memoize visited URLs
-    private ConcurrentHashMap<String, Boolean> unvisitedURLs = new ConcurrentHashMap<>();//will contain pages we have yet to visit
+    private final ConcurrentHashMap<String, Boolean> imageList= new ConcurrentHashMap<>();//Stores the images we will display after crawling
+    private final ConcurrentHashMap<String, Boolean> visitedURLs = new ConcurrentHashMap<>();//hashmap to memoize visited URLs
+    private final ConcurrentLinkedQueue<String> uncrawledURLs = new ConcurrentLinkedQueue<>();
     private String domain;
     private final ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(3);
 
@@ -45,7 +45,7 @@ public class ImageRetriever {
             String formattedURL = formatURL(element.attr("href"));
             if(!formattedURL.equals("")) {
                 if(!visitedURLs.containsKey(formattedURL)){
-                    unvisitedURLs.put(formattedURL, false);//URL of a proper subpage, false because it hasn't been crawled/visited yet.
+                    uncrawledURLs.add(formattedURL);//URL of a proper subpage, false because it hasn't been crawled/visited yet.
                 }
             }
         }
@@ -59,54 +59,57 @@ public class ImageRetriever {
             }
         }
     }
-    private void pageCrawl(String url, CountDownLatch latch){
+    private void pageCrawl(String url){
         message(": Starting crawl of ", url);
         try {
             String properURL = formatURL(url);
             if (!properURL.equals("")) {
+                visitedURLs.put(properURL,true);
                 Document doc = Jsoup.connect(properURL).get();
                 retrieveImages(doc);
                 populateSubpages(doc);
-                visitedURLs.put(properURL,true);
             }
         } catch (IOException e) {e.printStackTrace();}
-        latch.countDown();
     }
-
+    void shutdownAndAwaitTermination(ExecutorService pool) {
+        pool.shutdown(); // Disable new tasks from being submitted
+        try {
+            // Wait a while for existing tasks to terminate
+            if (!pool.awaitTermination(60, TimeUnit.SECONDS)) {
+                pool.shutdownNow(); // Cancel currently executing tasks
+                // Wait a while for tasks to respond to being cancelled
+                if (!pool.awaitTermination(60, TimeUnit.SECONDS))
+                    System.err.println("Pool did not terminate");
+            }
+        } catch (InterruptedException ie) {
+            // (Re-)Cancel if current thread also interrupted
+            pool.shutdownNow();
+            // Preserve interrupt status
+            Thread.currentThread().interrupt();
+        }
+    }
     //method called in ImageFinder
     public Set<String> crawlURL(String url){
         try{
             domain = new URI(url).getHost();
 
             //crawl main page(s)
-            CountDownLatch latch = new CountDownLatch(1);
-            executor.submit(()-> pageCrawl(url, latch));
-            latch.await();
+            executor.submit(()-> pageCrawl(url));
+            while(executor.getCompletedTaskCount() != 1){}
 
             //crawl subpages
-            int counter = 0;
-            while(true) {
-                int subpageLatchSize = Math.min(unvisitedURLs.size(), 250);
-                CountDownLatch subPageLatch = new CountDownLatch(subpageLatchSize);
-                if(executor.getCompletedTaskCount() + counter > 250){
-                    executor.shutdown();
-                    break;
-                }
-                for (String subpageURL : unvisitedURLs.keySet()) {
-                    ++counter;
-                    if(counter > 250) break;
-                    if(visitedURLs.contains(subpageURL)){
-                        subPageLatch.countDown();
-                    }
-                    else if(executor.getCompletedTaskCount() + counter < 250) {
-                        executor.submit(() -> pageCrawl(subpageURL, subPageLatch));
-                    }
-                }
-                Thread.sleep(1000);
-            }
-            System.out.println(executor.awaitTermination(1, TimeUnit.MINUTES));
-        } catch(Exception e) { e.printStackTrace(); }
 
+            while(uncrawledURLs.iterator().hasNext() && executor.getCompletedTaskCount() < 150) {
+                String subpageURL = uncrawledURLs.poll();
+                if(!visitedURLs.containsKey(subpageURL)){
+                    executor.submit(() -> pageCrawl(subpageURL));
+                }
+                Thread.sleep(25);
+            }
+            System.out.println(uncrawledURLs.size() + " , " + executor.getCompletedTaskCount());
+            shutdownAndAwaitTermination(executor);
+
+        } catch(Exception e) { e.printStackTrace(); }
         return imageList.keySet();
     }
 }
